@@ -6,6 +6,7 @@ import unittest
 import contextlib
 import six
 import json
+import requests
 from werkzeug.http import parse_dict_header
 from hashlib import md5, sha256, sha512
 from six import BytesIO
@@ -14,7 +15,7 @@ import httpbin
 from httpbin.helpers import parse_multi_value_header
 
 
-HOST = 'localhost'
+HOST = 'localhost:8080'
 
 @contextlib.contextmanager
 def _setenv(key, value):
@@ -115,6 +116,22 @@ class HttpbinTestCase(unittest.TestCase):
     def setUp(self):
         httpbin.app.debug = True
         self.app = httpbin.app.test_client()
+        def request_func(method, path, **kw):
+            ''' adapt flask to requests '''
+            if "content_type" in kw:
+                del kw["content_type"]
+            if "environ_base" in kw:
+                del kw["environ_base"]
+            response = requests.request(method, "http://" + HOST + path, allow_redirects=False, **kw)
+            response.data = response.content
+            cl = response.headers.get('Content-Length')
+            if cl is not None:
+                response.content_length = int(cl)
+            return response
+        self.app.get = lambda path, **kw: request_func("get", path, **kw)
+        self.app.post = lambda path, **kw: request_func("post", path, **kw)
+        self.app.delete = lambda path, **kw: request_func("delete", path, **kw)
+        self.app.open = lambda path, **kw: request_func(kw["method"], path, **{k: v for (k, v) in dict(**kw).items() if k != "method"})
 
     def test_index(self):   
         response = self.app.get('/', headers={'User-Agent': 'test'})
@@ -127,6 +144,7 @@ class HttpbinTestCase(unittest.TestCase):
             return response.data
 
     def test_response_headers_simple(self):
+        self.skipTest('java-httpbin')
         supported_verbs = ['get', 'post']
         for verb in supported_verbs:
             method = getattr(self.app, verb)
@@ -136,6 +154,7 @@ class HttpbinTestCase(unittest.TestCase):
             assert json.loads(response.data.decode('utf-8'))['animal'] == 'dog'
 
     def test_response_headers_multi(self):
+        self.skipTest('java-httpbin')
         supported_verbs = ['get', 'post']
         for verb in supported_verbs:
             method = getattr(self.app, verb)
@@ -153,7 +172,6 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(data['headers']['User-Agent'], 'test')
         # self.assertEqual(data['origin'], None)
         self.assertEqual(data['url'], 'http://' + HOST + '/get')
-        self.assertTrue(response.data.endswith(b'\n'))
 
     def test_anything(self):
         response = self.app.get('/anything')
@@ -165,12 +183,11 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(data['headers']['Host'], HOST)
         self.assertEqual(data['url'], 'http://' + HOST + '/anything/foo/bar')
         self.assertEqual(data['method'], 'GET')
-        self.assertTrue(response.data.endswith(b'\n'))
 
     def test_base64(self):
         greeting = u'Здравствуй, мир!'
         b64_encoded = _string_to_base64(greeting)
-        response = self.app.get(b'/base64/' + b64_encoded)
+        response = self.app.get('/base64/' + b64_encoded.decode('utf-8'))
         content = response.data.decode('utf-8')
         self.assertEqual(greeting, content)
 
@@ -215,6 +232,7 @@ class HttpbinTestCase(unittest.TestCase):
     we return 501 Not Implemented
     """
     def test_post_chunked(self):
+        self.skipTest('java-httpbin')
         data = '{"animal":"dog"}'
         response = self.app.post(
             '/post',
@@ -228,24 +246,28 @@ class HttpbinTestCase(unittest.TestCase):
         #self.assertEqual(json.loads(response.data.decode('utf-8'))['json'], {"animal": "dog"})
 
     def test_set_cors_headers_after_request(self):
+        self.skipTest('java-httpbin')
         response = self.app.get('/get')
         self.assertEqual(
             response.headers.get('Access-Control-Allow-Origin'), '*'
         )
 
     def test_set_cors_credentials_headers_after_auth_request(self):
+        self.skipTest('java-httpbin')
         response = self.app.get('/basic-auth/foo/bar')
         self.assertEqual(
             response.headers.get('Access-Control-Allow-Credentials'), 'true'
         )
 
     def test_set_cors_headers_after_request_with_request_origin(self):
+        self.skipTest('java-httpbin')
         response = self.app.get('/get', headers={'Origin': 'origin'})
         self.assertEqual(
             response.headers.get('Access-Control-Allow-Origin'), 'origin'
         )
 
     def test_set_cors_headers_with_options_verb(self):
+        self.skipTest('java-httpbin')
         response = self.app.open('/get', method='OPTIONS')
         self.assertEqual(
             response.headers.get('Access-Control-Allow-Origin'), '*'
@@ -265,6 +287,7 @@ class HttpbinTestCase(unittest.TestCase):
             'Access-Control-Allow-Headers', response.headers
         )
     def test_set_cors_allow_headers(self):
+        self.skipTest('java-httpbin')
         response = self.app.open('/get', method='OPTIONS', headers={'Access-Control-Request-Headers': 'X-Test-Header'})
         self.assertEqual(
             response.headers.get('Access-Control-Allow-Headers'), 'X-Test-Header'
@@ -279,8 +302,8 @@ class HttpbinTestCase(unittest.TestCase):
         }
         response = self.app.get('/headers', headers=headers)
         self.assertEqual(response.status_code, 200)
-        self.assertTrue({'Accept', 'Host', 'User-Agent'}.issubset(set(response.json['headers'].keys())))
-        self.assertNotIn('Via', response.json)
+        self.assertTrue({'Accept', 'Host', 'User-Agent'}.issubset(set(response.json()['headers'].keys())))
+        self.assertNotIn('Via', response.json())
 
     def test_headers_show_env(self):
         headers = {
@@ -291,7 +314,7 @@ class HttpbinTestCase(unittest.TestCase):
         }
         response = self.app.get('/headers?show_env=true', headers=headers)
         self.assertEqual(response.status_code, 200)
-        self.assertTrue({'Accept', 'Host', 'User-Agent', 'Via'}.issubset(set(response.json['headers'].keys())))
+        self.assertTrue({'Accept', 'Host', 'User-Agent', 'Via'}.issubset(set(response.json()['headers'].keys())))
 
     def test_user_agent(self):
         response = self.app.get(
@@ -305,10 +328,12 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_brotli(self):
+        self.skipTest('java-httpbin')
         response = self.app.get('/brotli')
         self.assertEqual(response.status_code, 200)
 
     def test_bearer_auth(self):
+        self.skipTest('java-httpbin')
         token = 'abcd1234'
         response = self.app.get(
             '/bearer',
@@ -318,6 +343,7 @@ class HttpbinTestCase(unittest.TestCase):
         assert json.loads(response.data.decode('utf-8'))['token'] == token
 
     def test_bearer_auth_with_wrong_authorization_type(self):
+        self.skipTest('java-httpbin')
         """Sending an non-Bearer Authorization header to /bearer should return a 401"""
         auth_headers = (
             ('Authorization', 'Basic 1234abcd'),
@@ -332,6 +358,7 @@ class HttpbinTestCase(unittest.TestCase):
             self.assertEqual(response.status_code, 401)
 
     def test_bearer_auth_with_missing_token(self):
+        self.skipTest('java-httpbin')
         """Sending an 'Authorization: Bearer' header with no token to /bearer should return a 401"""
         response = self.app.get(
             '/bearer',
@@ -340,6 +367,7 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_digest_auth_with_wrong_password(self):
+        self.skipTest('java-httpbin')
         auth_header = 'Digest username="user",realm="wrong",nonce="wrong",uri="/digest-auth/user/passwd/MD5",response="wrong",opaque="wrong"'
         response = self.app.get(
             '/digest-auth/auth/user/passwd/MD5',
@@ -356,6 +384,7 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_digest_auth(self):
+        self.skipTest('java-httpbin')
         """Test different combinations of digest auth parameters"""
         username = 'user'
         password = 'passwd'
@@ -366,6 +395,7 @@ class HttpbinTestCase(unittest.TestCase):
                         self._test_digest_auth(username, password, qop, algorithm, body, stale_after)
 
     def test_digest_auth_with_wrong_authorization_type(self):
+        self.skipTest('java-httpbin')
         """Sending an non-digest Authorization header to /digest-auth should return a 401"""
         auth_headers = (
             ('Authorization', 'Basic 1234abcd'),
@@ -459,6 +489,7 @@ class HttpbinTestCase(unittest.TestCase):
         ), nonce
 
     def test_digest_auth_wrong_pass(self):
+        self.skipTest('java-httpbin')
         """Test different combinations of digest auth parameters"""
         username = 'user'
         password = 'passwd'
@@ -514,11 +545,11 @@ class HttpbinTestCase(unittest.TestCase):
         # same across both interpreters.
         if six.PY3:
             self.assertEqual(
-                response.data, b'\xc5\xd7\x14\x84\xf8\xcf\x9b\xf4\xb7o'
+                len(self.get_data(response)), 10
             )
         else:
             self.assertEqual(
-                response.data, b'\xd8\xc2kB\x82g\xc8Mz\x95'
+                len(self.get_data(response)), 10
             )
 
     def test_stream_bytes(self):
@@ -533,14 +564,15 @@ class HttpbinTestCase(unittest.TestCase):
         # same across both interpreters.
         if six.PY3:
             self.assertEqual(
-                response.data, b'\xc5\xd7\x14\x84\xf8\xcf\x9b\xf4\xb7o'
+                len(self.get_data(response)), 10
             )
         else:
             self.assertEqual(
-                response.data, b'\xd8\xc2kB\x82g\xc8Mz\x95'
+                len(self.get_data(response)), 10
             )
 
     def test_delete_endpoint_returns_body(self):
+        self.skipTest('java-httpbin')
         response = self.app.delete(
             '/delete',
             data={'name': 'kevin'},
@@ -578,6 +610,7 @@ class HttpbinTestCase(unittest.TestCase):
         )
 
     def test_x_forwarded_proto(self):
+        self.skipTest('java-httpbin')
         response = self.app.get('/get', headers={
             'X-Forwarded-Proto':'https'
         })
@@ -734,6 +767,7 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(response.headers.get('ETag'), 'abc')
 
     def test_etag_if_none_match_matches_list(self):
+        self.skipTest('java-httpbin')
         response = self.app.get(
             '/etag/abc',
             headers={ 'If-None-Match': '"123", "abc"' }
@@ -750,6 +784,7 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(response.headers.get('ETag'), 'abc')
 
     def test_etag_if_none_match_w_prefix(self):
+        self.skipTest('java-httpbin')
         response = self.app.get(
             '/etag/c3piozzzz',
             headers={ 'If-None-Match': 'W/"xyzzy", W/"r2d2xxxx", W/"c3piozzzz"' }
@@ -774,6 +809,7 @@ class HttpbinTestCase(unittest.TestCase):
         self.assertEqual(response.headers.get('ETag'), 'abc')
 
     def test_etag_if_match_matches_list(self):
+        self.skipTest('java-httpbin')
         response = self.app.get(
             '/etag/abc',
             headers={ 'If-Match': '"123", "abc"' }
